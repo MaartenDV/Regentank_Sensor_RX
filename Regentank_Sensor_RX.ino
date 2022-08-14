@@ -11,78 +11,90 @@
 
 
 //************ DEFINES ************
-#define pin_RX    2   
-#define pin_TX    3   //unused
-#define pin_d4    4 
-#define pin_d5    5 
-#define pin_d6    6 
-#define pin_d7    7
-#define pin_RS    8
-#define pin_EN    9 
-#define pin_BL    10 
+#define ANALOG_PIN  0
+#define PIN_RX    2   
+#define PIN_TX    3   //unused
+#define PIN_d4    4 
+#define PIN_d5    5 
+#define PIN_d6    6 
+#define PIN_d7    7
+#define PIN_RS    8
+#define PIN_EN    9 
+#define PIN_BL    10 
 
 //#define lcd_brightness      125
 #define TASK_DELAY_MS         100
 #define PACKET_BYTE_LENGTH    5
-#define PACKET_REV            1
-#define TASK_DELAY_MS         1000
+#define PACKET_REV            2
+//#define TASK_DELAY_MS         1000
+
+#define TASK_BUTTON_MILI      5
 
 //rain well parameters
-#define OUTFLOW_HEIGHT_MM           1500    //max water height
-#define MUD_THICKNESS_MM            100     //mud in well height
-#define SENSOR_HEIGHT_MM            1700    //height sensor above empty well
-#define ULTRASONIC_DEPTH_SAMPLES    32
+//#define OUTFLOW_HEIGHT_MM           1500    //max water height
+//#define MUD_THICKNESS_MM            100     //mud in well height
+//#define SENSOR_HEIGHT_MM            1700    //height sensor above empty well
+//#define ULTRASONIC_DEPTH_SAMPLES    32
 
 //lcd keypad defines
-#define btnRIGHT  0
-#define btnUP     1
-#define btnDOWN   2
-#define btnLEFT   3
-#define btnSELECT 4
-#define btnNONE   5
+#define BTN_RIGHT  0
+#define BTN_UP     1
+#define BTN_DOWN   2
+#define BTN_LEFT   3
+#define BTN_SELECT 4
+#define BTN_NONE   5
+#define BTN_UNCLEAR   6   //most likely during a debounce moment
+
 #define MAIN_PAGE     0
 #define PAGE_1        1
 #define PAGE_2        2
 
+#define DEBOUNCE_LENGTH   8
+
 
 //************ VARIABLES ************
-RH_ASK driver(2000, pin_RX, pin_TX, 0); // ATTiny, RX on D3 (pin 2 on attiny85) TX on D4 (pin 3 on attiny85), 
-LiquidCrystal lcd( pin_RS,  pin_EN,  pin_d4,  pin_d5,  pin_d6,  pin_d7);
-unsigned long previousMillis = 0;
-unsigned long currentMillis = 0;
-word ultrasonic_depth; //unsigned 16bit
-float ds18b20_temperature; //signed 16 bit
-uint8_t tx_packet[PACKET_BYTE_LENGTH];
-word last_update_seconds = 0;
-word max_last_update_seconds = 0;
+RH_ASK driver(2000, PIN_RX, PIN_TX, 0); // ATTiny, RX on D3 (pin 2 on attiny85) TX on D4 (pin 3 on attiny85), 
+LiquidCrystal lcd(PIN_RS,  PIN_EN,  PIN_d4,  PIN_d5,  PIN_d6,  PIN_d7);
+unsigned long button_task_millis;
+uint8_t button_state;
+uint8_t buttons_debounce_array[DEBOUNCE_LENGTH];
+uint8_t previous_buttons_state;
+bool bool_button_state_changed;
+
+//unsigned long previousMillis = 0;
+//unsigned long currentMillis = 0;
+//word ultrasonic_depth; //unsigned 16bit
+//float ds18b20_temperature; //signed 16 bit
+//uint8_t tx_packet[PACKET_BYTE_LENGTH];
+//word last_update_seconds = 0;
+//word max_last_update_seconds = 0;
 //averaging variables
-unsigned long ultrasonic_depth_samples_array[ULTRASONIC_DEPTH_SAMPLES];
-unsigned long average_ultrasonic_depth = 0;
+//unsigned long ultrasonic_depth_samples_array[ULTRASONIC_DEPTH_SAMPLES];
+//unsigned long average_ultrasonic_depth = 0;
 
 //lcd variables
-uint16_t number_of_samples = 0;
-uint8_t page_selected = PAGE_1;
+//uint16_t number_of_samples = 0;
+uint8_t page_selected = MAIN_PAGE;
 
 //button variables
-int adc_key_in  = 0;
+uint16_t adc_key_in  = 0;
+
 
 //************ FUNCTIONS ************
 void(* resetFunc) (void) = 0;//declare reset function at address 0
 
-// read the buttons
-int read_LCD_buttons() {
-  adc_key_in = analogRead(0);      // read the value from the sensor 
-  // my buttons when read are centered at these valies: 0, 144, 329, 504, 741
-  // we add approx 50 to those values and check to see if we are close
-  if (adc_key_in > 1000) return btnNONE; // We make this the 1st option for speed reasons since it will be the most likely result
-  // For V1.1 us this threshold
-  if (adc_key_in < 50)   return btnRIGHT;  
-  if (adc_key_in < 250)  return btnUP; 
-  if (adc_key_in < 450)  return btnDOWN; 
-  if (adc_key_in < 650)  return btnLEFT; 
-  if (adc_key_in < 850)  return btnSELECT;
-}  
-//************ SETUP ************
+
+//******* FUNCTION DISCIPTION *******
+void do_button_task(void);
+void enabel_lcd_backlight(void);
+uint8_t convert_analog_to_button(uint16_t);
+uint8_t debounce_button_state(uint8_t);
+bool button_state_ready(void);
+
+
+// ***************************************
+//                 SETUP
+//****************************************
 void setup() {
 
   //KEEPOUT START
@@ -106,19 +118,105 @@ void setup() {
   delay(2000);
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("S: ");
-  lcd.setCursor(0, 1);
-  lcd.print("T: ");  
-  
-  //backlight
-  //pinMode(pin_BL, OUTPUT);    //does not work?? --> asume a collision with timer 1 (=used in the ASK lib)
-  //analogWrite(10, 125);       //does not work??
+  lcd.print("Waiting for data...");
+
+  //init buttons
+  button_task_millis = millis();
+  button_state = BTN_NONE;
+  previous_buttons_state = BTN_NONE;
+  bool_button_state_changed = false;
+  for(int i = 0; i < DEBOUNCE_LENGTH; i++)  {//fil the debounce array
+    buttons_debounce_array[i] = BTN_NONE;
+  }
+
+  //init LCD
+  enabel_lcd_backlight();
 }
 
 
-//************ MAIN ************
+
+// ***************************************
+//                  MAIN
+//****************************************
 void loop() {
 
+  // button task
+  if ((millis() - button_task_millis) >=  TASK_BUTTON_MILI) {
+    do_button_task();
+    button_task_millis = millis();
+  }
+  
+}
+
+
+
+// ***************************************
+//             TASKS button
+//****************************************
+void do_button_task() {
+  uint16_t temp_analog_button_read;
+  uint8_t temp_button_undebounced;
+  previous_buttons_state = button_state;
+  
+  temp_analog_button_read = analogRead(ANALOG_PIN);
+  temp_button_undebounced = convert_analog_to_button(temp_analog_button_read);
+  button_state = debounce_button_state(temp_button_undebounced);
+
+  if (button_state_ready() == true) {
+    if (previous_buttons_state != button_state) {
+      bool_button_state_changed = true;
+      Serial.print("The NEW button state is : ");
+      Serial.println(button_state);
+    }
+  }
+}
+
+
+
+// ***************************************
+//            basic FUNCTIONS
+//****************************************
+void enabel_lcd_backlight() {
+  digitalWrite(PIN_BL, HIGH);
+}
+
+// read the buttons
+uint8_t convert_analog_to_button(uint16_t adc_key_in) {  
+  // my buttons when read are centered at these valies: 0, 144, 329, 504, 741
+  // we add approx 50 to those values and check to see if we are close
+  if (adc_key_in > 1000) return BTN_NONE; // We make this the 1st option for speed reasons since it will be the most likely result
+  // For V1.1 use this threshold
+  if (adc_key_in < 50)   return BTN_RIGHT;  
+  if (adc_key_in < 200)  return BTN_UP; 
+  if (adc_key_in < 400)  return BTN_DOWN; 
+  if (adc_key_in < 600)  return BTN_LEFT; 
+  if (adc_key_in < 800)  return BTN_SELECT;
+}  
+
+//debounce the buttons
+uint8_t debounce_button_state(uint8_t button_undebounced) {
+  //shift all values one position
+  for (uint8_t i = (DEBOUNCE_LENGTH - 1) ; i > 0; i--) {
+    buttons_debounce_array[i] = buttons_debounce_array[i - 1];  //shift values in array one place
+  }
+  //fill in new button
+  buttons_debounce_array[0] = button_undebounced;
+  
+  //debounce and place the necessary flags (by checking if the first byte occurs in the intire debounce buffer)
+  for(uint8_t j = 1; j < DEBOUNCE_LENGTH; j++) {
+    if(buttons_debounce_array[0] != buttons_debounce_array[j]) {
+      return BTN_UNCLEAR;
+      break;
+    }   
+  }
+  return buttons_debounce_array[0];
+}
+
+//check if valid button detected
+bool button_state_ready() {
+  return (button_state != BTN_UNCLEAR);
+}
+/*
   // check for incomming transmition
   if (driver.recv(tx_packet, PACKET_BYTE_LENGTH)) { // Non-blocking
   
@@ -252,3 +350,4 @@ void loop() {
     previousMillis = currentMillis;
   }
 }
+*/
