@@ -28,7 +28,8 @@
 #define PACKET_REV            2
 //#define TASK_DELAY_MS         1000
 
-#define TASK_BUTTON_MILI      5
+#define TASK_BUTTON_MILI_PERIOD       5
+#define TASK_DISPLAY_MILI_PERIOD      10
 
 //rain well parameters
 //#define OUTFLOW_HEIGHT_MM           1500    //max water height
@@ -48,6 +49,7 @@
 #define MAIN_PAGE     0
 #define PAGE_1        1
 #define PAGE_2        2
+#define LAST_PAGE     PAGE_2    //set last page to the highest sequential page number
 
 #define DEBOUNCE_LENGTH   8
 
@@ -56,10 +58,12 @@
 RH_ASK driver(2000, PIN_RX, PIN_TX, 0); // ATTiny, RX on D3 (pin 2 on attiny85) TX on D4 (pin 3 on attiny85), 
 LiquidCrystal lcd(PIN_RS,  PIN_EN,  PIN_d4,  PIN_d5,  PIN_d6,  PIN_d7);
 unsigned long button_task_millis;
+unsigned long display_task_millis;
 uint8_t button_state;
 uint8_t buttons_debounce_array[DEBOUNCE_LENGTH];
 uint8_t previous_buttons_state;
 bool bool_button_state_changed;
+void display_show_page(uint8_t);
 
 //unsigned long previousMillis = 0;
 //unsigned long currentMillis = 0;
@@ -74,7 +78,7 @@ bool bool_button_state_changed;
 
 //lcd variables
 //uint16_t number_of_samples = 0;
-uint8_t page_selected = MAIN_PAGE;
+uint8_t page_selected;;
 
 //button variables
 uint16_t adc_key_in  = 0;
@@ -86,10 +90,16 @@ void(* resetFunc) (void) = 0;//declare reset function at address 0
 
 //******* FUNCTION DISCIPTION *******
 void do_button_task(void);
+void do_display_task(void);
 void enabel_lcd_backlight(void);
 uint8_t convert_analog_to_button(uint16_t);
 uint8_t debounce_button_state(uint8_t);
 bool button_state_ready(void);
+bool flag_button_state_changed(void);
+void clear_flag_button_state_changed(void);
+uint8_t button_get_state(void);
+void display_next_page(void);
+void display_previous_page(void);
 
 
 // ***************************************
@@ -117,8 +127,10 @@ void setup() {
   lcd.print("Started...   v01");
   delay(2000);
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Waiting for data...");
+  //lcd.setCursor(0, 0);
+  //lcd.print("Waiting for data");
+  //lcd.setCursor(0,1);
+  //lcd.print("...");
 
   //init buttons
   button_task_millis = millis();
@@ -130,6 +142,9 @@ void setup() {
   }
 
   //init LCD
+  page_selected = MAIN_PAGE;
+  display_show_page(page_selected);
+  display_task_millis = millis();
   enabel_lcd_backlight();
 }
 
@@ -141,13 +156,17 @@ void setup() {
 void loop() {
 
   // button task
-  if ((millis() - button_task_millis) >=  TASK_BUTTON_MILI) {
+  if ((millis() - button_task_millis) >=  TASK_BUTTON_MILI_PERIOD) {
     do_button_task();
     button_task_millis = millis();
   }
-  
-}
 
+  //display task
+  if ((millis() - display_task_millis) >=  TASK_DISPLAY_MILI_PERIOD) {
+    do_display_task();
+    display_task_millis = millis();
+  } 
+}
 
 
 // ***************************************
@@ -172,6 +191,23 @@ void do_button_task() {
 }
 
 
+// ***************************************
+//             TASKS display
+//****************************************
+void do_display_task() {
+  //check if display contents need to be changed due to button input
+  if(flag_button_state_changed() == true) {
+    if (button_get_state() == BTN_UP) {
+      display_next_page();
+    }
+    if (button_get_state() == BTN_DOWN) {
+      display_previous_page();
+    }
+    clear_flag_button_state_changed();
+  }
+  //check if display contents need to be changed due to button input
+  //todo
+}
 
 // ***************************************
 //            basic FUNCTIONS
@@ -215,6 +251,83 @@ uint8_t debounce_button_state(uint8_t button_undebounced) {
 //check if valid button detected
 bool button_state_ready() {
   return (button_state != BTN_UNCLEAR);
+}
+
+//check if a new button is pressed
+bool flag_button_state_changed() {
+  return bool_button_state_changed;
+}
+
+//clear the new button flag
+void clear_flag_button_state_changed() {
+  bool_button_state_changed = false;
+}
+
+//get the current button state
+uint8_t button_get_state() {
+  return button_state;
+}
+
+//display the next page
+void display_next_page(void) {
+  if (page_selected >= LAST_PAGE) {
+    page_selected = MAIN_PAGE;
+  } else {
+    page_selected++;
+  }
+  display_show_page(page_selected);
+}
+
+//dispay the previous page
+void display_previous_page(void) {
+  if (page_selected == MAIN_PAGE) {
+    page_selected = LAST_PAGE;
+  } else {
+    page_selected--;
+  }
+  display_show_page(page_selected);
+}
+
+//show the damn page!
+void display_show_page(uint8_t page) {
+  switch (page) {
+    case MAIN_PAGE:
+      lcd.clear();
+      lcd.setCursor(0, 0);    //collumn - row
+      lcd.print("V: 99%");
+      lcd.setCursor(0, 1);    //collumn - row
+      lcd.print("T: 25");
+      lcd.print((char)223);
+      lcd.print("C");
+      lcd.setCursor(15, 1);    //collumn - row
+      lcd.print("M");
+    break;
+    
+    case PAGE_1:
+      lcd.clear();
+      lcd.setCursor(0, 0);    //collumn - row
+      lcd.print("Vbat: 4.2V%");
+      lcd.setCursor(0, 1);    //collumn - row
+      lcd.print("SOC: 99%");
+      lcd.setCursor(15, 1);    //collumn - row
+      lcd.print("1");
+    break;
+    
+    case PAGE_2:
+      lcd.clear();
+      lcd.setCursor(0, 0);    //collumn - row
+      lcd.print("00:00");
+      lcd.setCursor(0, 1);    //collumn - row
+      lcd.print("dd/mm/yyyy");
+      lcd.setCursor(15, 1);    //collumn - row
+      lcd.print("2");
+    break;
+    
+    default:
+      lcd.clear();
+      lcd.setCursor(0, 0);    //collumn - row
+      lcd.print("FAULT!");    //should not be possible
+  }
 }
 /*
   // check for incomming transmition
